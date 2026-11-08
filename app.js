@@ -812,14 +812,17 @@
   var API_BASE = window.MIKO_API_BASE || 'https://api.yenchiu.com';
   var AI_STATE = { state: 'unknown' };   // unknown | ok | off
 
-  function mikoAI(history, text) {
+  function mikoAI(history, text, memory) {
     var recent = (history || []).slice(-10).map(function (m) {
       return { role: m.role === 'her' ? 'her' : 'me', text: String(m.text || '').slice(0, 200) };
     });
     return fetch(API_BASE + '/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ persona: 'miko', history: recent, text: String(text || '').slice(0, 300) })
+      body: JSON.stringify({
+        persona: 'miko', history: recent, text: String(text || '').slice(0, 300),
+        memory: String(memory || '').slice(0, 1800)
+      })
     }).then(function (r) {
       if (r.status === 503) { AI_STATE.state = 'off'; return null; }
       if (!r.ok) { AI_STATE.state = 'off'; return null; }
@@ -877,7 +880,7 @@
       pending.className = 'after-line her pending';
       pending.innerHTML = '<span class="st-typing">对方正在输入</span><span class="dots"><i></i><i></i><i></i></span>';
       if (log) { log.appendChild(pending); log.scrollTop = log.scrollHeight; }
-      Promise.resolve(window.MIKO_AI(st.after.slice(0, -1), text)).then(function (reply) {
+      Promise.resolve(window.MIKO_AI(st.after.slice(0, -1), text, storyMemory())).then(function (reply) {
         if (pending.parentNode) pending.parentNode.removeChild(pending);
         if (!reply) {
           if (AI_STATE.state === 'off') toast('信号有点差，先记下了');
@@ -903,6 +906,34 @@
   }
 
 
+  /* ---------------- 给 AI 的「记忆」 ---------------- */
+
+  var CHAPTER_TITLE = {
+    '番外一': '你要来我家吃蛋糕吗', '第一章': '路人美术图书馆',
+    '番外二': '令人羞耻的游戏惩罚', '第二章': '死亡图书馆事件',
+    '第三章': '潜行博物馆暗域', '第四章': '学院传说异闻录',
+    '第五章': '剧院惊魂事件簿', '第六章': '医院迷离旧世纪'
+  };
+
+  function storyMemory() {
+    var parts = [];
+    parts.push('【世界观】这是《异次元通讯》：玩家用手机和一个叫 Miko 的女孩聊天，两个人一起被卷进城市里的怪事。她 16 岁，说话短、口语、傲娇。');
+    var done = [];
+    Object.keys(CHAPTER_TITLE).forEach(function (id) {
+      if (st.done && st.done[id]) done.push(id + '《' + CHAPTER_TITLE[id] + '》');
+    });
+    if (done.length) parts.push('【你们一起经历过的】' + done.join('、') + '。这些是共同记忆，可以自然提起。');
+    var lines = [];
+    chapterLog(st.chapterId).slice(-36).forEach(function (e) {
+      if (e.c) { lines.push('我：' + String(e.c.t || '').slice(0, 60)); return; }
+      if (e.t) lines.push(e.t);
+    });
+    if (lines.length) parts.push('【最近发生的事（按时间顺序）】\n' + lines.join('\n'));
+    parts.push('【要求】只基于上面这些记忆和日常常识说话；没发生过的剧情、不认识的校园琐事不要编造，也不要假装记得。');
+    var text = parts.join('\n');
+    return text.length > 1800 ? text.slice(0, 1800) : text;
+  }
+
   /* ---------------- 每章聊天记录 ---------------- */
   var LOG_CAP = 6000;
 
@@ -917,7 +948,7 @@
     var L = chapterLog();
     var last = L[L.length - 1];
     if (last && last.r === row.i) return;          // 重复渲染去重
-    L.push({ r: row.i });
+    L.push({ r: row.i, t: String(row.text || '').slice(0, 120) });
     if (L.length > LOG_CAP) L.splice(0, L.length - LOG_CAP);
   }
 
