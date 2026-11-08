@@ -807,7 +807,36 @@
     if (st.lastOnline && $('#view-chat') && $('#view-chat').classList.contains('active')) updateChatStatus();
   }, 30000);
 
-  /* ---------------- 后日谈（AI 未接入时的本地记事） ---------------- */
+  /* ---------------- 后日谈：接 api.yenchiu.com/chat ---------------- */
+
+  var API_BASE = window.MIKO_API_BASE || 'https://api.yenchiu.com';
+  var AI_STATE = { state: 'unknown' };   // unknown | ok | off
+
+  function mikoAI(history, text) {
+    var recent = (history || []).slice(-10).map(function (m) {
+      return { role: m.role === 'her' ? 'her' : 'me', text: String(m.text || '').slice(0, 200) };
+    });
+    return fetch(API_BASE + '/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ persona: 'miko', history: recent, text: String(text || '').slice(0, 300) })
+    }).then(function (r) {
+      if (r.status === 503) { AI_STATE.state = 'off'; return null; }
+      if (!r.ok) { AI_STATE.state = 'off'; return null; }
+      return r.json();
+    }).then(function (data) {
+      if (!data || !data.reply) return '';
+      AI_STATE.state = 'ok';
+      return String(data.reply);
+    }).catch(function () {
+      AI_STATE.state = 'off';
+      return '';
+    });
+  }
+
+  if (!window.MIKO_AI) window.MIKO_AI = mikoAI;
+
+  /* ---------------- 后日谈（本地记事 + 可选 AI 回复） ---------------- */
   function renderAfter() {
     var log = $('#after-log');
     if (!log) return;
@@ -826,9 +855,9 @@
     $('#after-modal').hidden = false;
     var hint = $('#after-hint');
     if (hint) {
-      hint.textContent = (typeof window.MIKO_AI === 'function')
-        ? '已接入 AI：她的回复由你配置的接口生成。'
-        : '结局之后的时间线。接入 AI 之前，这里只记录你想说的话（设置 window.MIKO_AI = async (history, text) => "..." 即可接上）。';
+      hint.textContent = AI_STATE.state === 'off'
+        ? '现在连不上她的信号，你说的话会被记下来，等能连上时再聊。'
+        : '结局之后的时间线。她记得你们聊过的这些事。';
     }
     renderAfter();
     setTimeout(function () { var i = $('#after-input'); if (i) i.focus(); }, 60);
@@ -842,12 +871,25 @@
     st.after.push({ role: 'me', text: text, t: Date.now() });
     renderAfter();
     save();
-    if (typeof window.MIKO_AI === 'function') {
+    if (typeof window.MIKO_AI === 'function' && AI_STATE.state !== 'off') {
+      var log = $('#after-log');
+      var pending = document.createElement('div');
+      pending.className = 'after-line her pending';
+      pending.innerHTML = '<span class="st-typing">对方正在输入</span><span class="dots"><i></i><i></i><i></i></span>';
+      if (log) { log.appendChild(pending); log.scrollTop = log.scrollHeight; }
       Promise.resolve(window.MIKO_AI(st.after.slice(0, -1), text)).then(function (reply) {
-        if (!reply) return;
+        if (pending.parentNode) pending.parentNode.removeChild(pending);
+        if (!reply) {
+          if (AI_STATE.state === 'off') toast('信号有点差，先记下了');
+          return;
+        }
         st.after.push({ role: 'her', text: String(reply), t: Date.now() });
         renderAfter();
         save();
+      }).catch(function () {
+        if (pending.parentNode) pending.parentNode.removeChild(pending);
+        AI_STATE.state = 'off';
+        toast('信号有点差，先记下了');
       });
     }
   }
